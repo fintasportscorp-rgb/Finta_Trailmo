@@ -3,11 +3,6 @@
  *
  * Uses @mediapipe/tasks-vision PoseLandmarker in VIDEO mode.
  * The WASM + model files are loaded from the JSDelivr CDN.
- *
- * To avoid browser tab crashes from memory exhaustion, frames are
- * downscaled to a small canvas before detection, the model is
- * periodically re-created to release WASM memory, and the loop
- * yields to the main thread every frame.
  */
 
 import type { FrameLandmarks, PoseLandmark, VideoAnalysis } from "./types"
@@ -16,51 +11,10 @@ const WASM_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/w
 const MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
 
-const MAX_DETECTION_DIM = 480
-
+// We dynamically import to avoid SSR issues
 let PoseLandmarkerClass: any = null
 let FilesetResolverClass: any = null
-let filesetResolverInstance: any = null
 let landmarkerInstance: any = null
-
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
-
-function adaptiveFps(durationSeconds: number): number {
-  if (durationSeconds <= 10) return 12
-  if (durationSeconds <= 30) return 8
-  if (durationSeconds <= 60) return 5
-  return 4
-}
-
-async function createLandmarker(): Promise<any> {
-  try {
-    return await PoseLandmarkerClass.createFromOptions(
-      filesetResolverInstance,
-      {
-        baseOptions: {
-          modelAssetPath: MODEL_CDN,
-          delegate: "GPU",
-        },
-        runningMode: "VIDEO",
-        numPoses: 1,
-      }
-    )
-  } catch {
-    return await PoseLandmarkerClass.createFromOptions(
-      filesetResolverInstance,
-      {
-        baseOptions: {
-          modelAssetPath: MODEL_CDN,
-          delegate: "CPU",
-        },
-        runningMode: "VIDEO",
-        numPoses: 1,
-      }
-    )
-  }
-}
 
 /**
  * Initialize the MediaPipe PoseLandmarker (idempotent - only loads once)
@@ -72,14 +26,42 @@ export async function initPoseLandmarker(
 
   onProgress?.("Loading MediaPipe WASM runtime...")
 
+  // Dynamic import to prevent SSR bundling
   const vision = await import("@mediapipe/tasks-vision")
   PoseLandmarkerClass = vision.PoseLandmarker
   FilesetResolverClass = vision.FilesetResolver
 
   onProgress?.("Downloading pose detection model...")
 
-  filesetResolverInstance = await FilesetResolverClass.forVisionTasks(WASM_CDN)
-  landmarkerInstance = await createLandmarker()
+  const filesetResolver = await FilesetResolverClass.forVisionTasks(WASM_CDN)
+
+  // Try GPU first, fall back to CPU
+  try {
+    landmarkerInstance = await PoseLandmarkerClass.createFromOptions(
+      filesetResolver,
+      {
+        baseOptions: {
+          modelAssetPath: MODEL_CDN,
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      }
+    )
+  } catch (gpuErr) {
+    console.warn("GPU delegate failed, falling back to CPU:", gpuErr)
+    landmarkerInstance = await PoseLandmarkerClass.createFromOptions(
+      filesetResolver,
+      {
+        baseOptions: {
+          modelAssetPath: MODEL_CDN,
+          delegate: "CPU",
+        },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      }
+    )
+  }
 
   onProgress?.("Pose model ready")
 }
@@ -116,9 +98,8 @@ function getVideoMeta(
 /**
  * Process a single video through MediaPipe PoseLandmarker frame-by-frame.
  *
- * Frames are downscaled to MAX_DETECTION_DIM before detection to reduce
- * memory usage. The landmarker is recycled periodically to prevent WASM
- * heap growth from crashing the tab.
+ * Strategy: use a hidden <video> element + requestVideoFrameCallback (or fallback
+ * to seek-based processing) to extract frames, then run PoseLandmarker.detectForVideo().
  */
 export async function processVideo(
   videoId: string,
@@ -132,26 +113,15 @@ export async function processVideo(
   }
 
   const meta = await getVideoMeta(blobUrl)
-  const targetFps = adaptiveFps(meta.duration)
+  const targetFps = 15 // Process at 15 fps (trade-off speed vs accuracy)
   const totalFrames = Math.ceil(meta.duration * targetFps)
   const frameInterval = 1 / targetFps
-
-  const scale = Math.min(1, MAX_DETECTION_DIM / Math.max(meta.width, meta.height))
-  const detW = Math.round(meta.width * scale)
-  const detH = Math.round(meta.height * scale)
-
-  const detectionCanvas = document.createElement("canvas")
-  detectionCanvas.width = detW
-  detectionCanvas.height = detH
-  const detCtx = detectionCanvas.getContext("2d", { willReadFrequently: false })!
 
   const frames: FrameLandmarks[] = []
   let totalVisibility = 0
   let visibilityCount = 0
-  let consecutiveErrors = 0
-  const MAX_CONSECUTIVE_ERRORS = 15
-  const RECYCLE_INTERVAL = 60
 
+  // Create a video element for frame extraction
   const video = document.createElement("video")
   video.muted = true
   video.playsInline = true
@@ -165,57 +135,33 @@ export async function processVideo(
     video.load()
   })
 
+  // Seek-based frame extraction
   for (let i = 0; i < totalFrames; i++) {
     if (abortSignal?.aborted) {
       video.remove()
-      detectionCanvas.remove()
       throw new Error("Processing aborted")
     }
 
     const seekTime = i * frameInterval
     if (seekTime > meta.duration) break
 
-    if (i > 0 && i % RECYCLE_INTERVAL === 0) {
-      try {
-        landmarkerInstance.close()
-      } catch {}
-      await yieldToMain()
-      landmarkerInstance = await createLandmarker()
-      await yieldToMain()
-    }
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          video.removeEventListener("seeked", onSeeked)
-          reject(new Error("Seek timeout"))
-        }, 5000)
-
-        const onSeeked = () => {
-          clearTimeout(timeout)
-          video.removeEventListener("seeked", onSeeked)
-          resolve()
-        }
-        video.addEventListener("seeked", onSeeked)
-        video.currentTime = seekTime
-      })
-    } catch {
-      frames.push([])
-      consecutiveErrors++
-      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        break
+    // Seek to the target time
+    await new Promise<void>((resolve) => {
+      const onSeeked = () => {
+        video.removeEventListener("seeked", onSeeked)
+        resolve()
       }
-      continue
-    }
+      video.addEventListener("seeked", onSeeked)
+      video.currentTime = seekTime
+    })
 
-    detCtx.clearRect(0, 0, detW, detH)
-    detCtx.drawImage(video, 0, 0, detW, detH)
-
+    // Run pose detection on this frame
     const timestampMs = seekTime * 1000
     try {
-      const result = landmarkerInstance.detectForVideo(detectionCanvas, timestampMs)
+      const result = landmarkerInstance.detectForVideo(video, timestampMs)
 
       if (result.landmarks && result.landmarks.length > 0) {
+        // Take the first (and only) pose
         const poseLandmarks: PoseLandmark[] = result.landmarks[0].map(
           (lm: any) => ({
             x: lm.x,
@@ -226,32 +172,26 @@ export async function processVideo(
         )
         frames.push(poseLandmarks)
 
+        // Track visibility
         const frameVisibility =
           poseLandmarks.reduce((sum, lm) => sum + lm.visibility, 0) /
           poseLandmarks.length
         totalVisibility += frameVisibility
         visibilityCount++
-        consecutiveErrors = 0
       } else {
+        // No pose detected in this frame - push empty
         frames.push([])
       }
-    } catch (err) {
-      console.warn(`Detection failed at frame ${i}:`, err)
+    } catch {
+      // Detection failed for this frame - push empty
       frames.push([])
-      consecutiveErrors++
-      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        break
-      }
     }
 
     const progress = Math.round(((i + 1) / totalFrames) * 100)
     onProgress?.(progress, i + 1, totalFrames)
-
-    await yieldToMain()
   }
 
   video.remove()
-  detectionCanvas.remove()
 
   const avgVisibility = visibilityCount > 0 ? totalVisibility / visibilityCount : 0
 
