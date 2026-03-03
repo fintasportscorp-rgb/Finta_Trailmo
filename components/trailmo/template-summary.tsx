@@ -26,7 +26,7 @@ export function TemplateSummary({ onLandmarkSelect }: TemplateSummaryProps) {
   if (configuredLandmarks.length === 0) return null
 
   return (
-    <div className="border-t border-border">
+    <div className="shrink-0 border-t border-border overflow-y-auto max-h-[30vh] md:max-h-none">
       <div className="px-4 py-3 md:px-6">
         <h3 className="mb-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
           {t("summary.configured")}

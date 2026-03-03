@@ -43,7 +43,7 @@ function TrailmoApp() {
         <main className="flex flex-1 flex-col overflow-hidden">
           <SkeletonViewer
             onLandmarkClick={handleLandmarkClick}
-            className="flex-1"
+            className="flex-1 min-h-0"
           />
           <TemplateSummary onLandmarkSelect={handleLandmarkClick} />
           <ActionBar />
