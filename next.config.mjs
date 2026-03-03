@@ -7,6 +7,7 @@ const nextConfig = {
     unoptimized: true,
   },
   serverExternalPackages: ["@mediapipe/tasks-vision"],
+  allowedDevOrigins: ["*"],
 }
 
 export default nextConfig
