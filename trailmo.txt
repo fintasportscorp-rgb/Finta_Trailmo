@@ -1,0 +1,167 @@
+Voici le **rapport de spécifications complet pour Trailmo MVP avancé** (sans login, budget serveur limité 4 CPU / 16 GB RAM).  
+Le document est structuré, prêt à être copié en Markdown → PDF ou Notion pour l’équipe de dev.
+
+### 1. Vue d’ensemble & objectifs
+**Nom** : Trailmo  
+**Objectif** : Outil web pour formateurs/coachs (sports codifiés : golf, tennis, yoga, postures, etc.) permettant de créer un template de tracking visuel sur squelette humain (33 landmarks MediaPipe), d’analyser jusqu’à 10 vidéos courtes (< 30 s), et d’exporter deux types de vidéos annotées.  
+**MVP sans login** : tout en session navigateur → templates et analyses perdus au refresh/fermeture onglet.  
+**Langues** : FR + EN (i18n simple).  
+**Responsive** : oui (mobile-first pour usage terrain).  
+**Contraintes serveur** : 4 CPU / 16 GB RAM → processing asynchrone + queue + modèle MediaPipe lite.
+
+### 2. User flows (simplifié – pas de login)
+**Flux formateur (création template)**  
+1. Accède à l’app → voit SVG squelette interactif (33 points cliquables).  
+2. Clique sur un landmark → ouvre side-panel droit :  
+   - Type tracker : Simple (anneau) OU Simple + Trailmotion  
+   - Couleur : sélection parmi rouge / orange / jaune / vert (fixe)  
+   - Priorité : 1 à 5 (entier)  
+   - Note feedback : texte libre  
+3. « Sauvegarder état » → applique les configs à tous les landmarks sélectionnés → SVG mis à jour (anneaux + trails statiques en preview).  
+4. Peut répéter pour d’autres landmarks (batch via multi-sélection ou état global).  
+5. Bouton « Lancer analyse » → passe à l’upload.
+
+**Flux analyse**  
+1. Upload jusqu’à 10 vidéos (drag & drop ou sélection).  
+2. Barre de progression globale + indications (ex. « Vidéo 3/10 en traitement… »).  
+3. Processing server-side (MediaPipe Pose).  
+4. Une fois fini : deux sections de téléchargement  
+   - Vidéo(s) originale(s) avec overlays (anneaux + trails animés, sans texte) → 1 fichier par vidéo uploadée.  
+   - Vidéo séquencée unique (fond noir) : slides successifs par landmark sélectionné.  
+5. Barre de chargement visible pendant export final (FFmpeg concat).
+
+### 3. Data model (JSON – stocké en localStorage/sessionStorage)
+```json
+{
+  "templateId": "uuid-v4-auto",
+  "createdAt": "ISO-date",
+  "landmarks": {
+    "11": {  // left_shoulder (exemple index MediaPipe)
+      "enabled": true,
+      "trackerType": "simple" | "trail",
+      "color": "red" | "orange" | "yellow" | "green",
+      "priority": 1 | 2 | 3 | 4 | 5,          // weight cinétique
+      "note": "Texte libre feedback (ex. \"Garder épaule haute\")"
+    },
+    // ... jusqu'à 32 (seuls les activés sont stockés)
+  },
+  "maxLandmarks": 15,  // limite MVP pour éviter exports trop longs
+  "videos": []         // temporaire, refs blob ou URLs uploadées
+}
+```
+
+**Liste officielle des 33 landmarks MediaPipe Pose** (noms normalisés, index 0–32) :
+
+0. nose  
+1. left_eye_inner  
+2. left_eye  
+3. left_eye_outer  
+4. right_eye_inner  
+5. right_eye  
+6. right_eye_outer  
+7. left_ear  
+8. right_ear  
+9. mouth_left  
+10. mouth_right  
+11. left_shoulder  
+12. right_shoulder  
+13. left_elbow  
+14. right_elbow  
+15. left_wrist  
+16. right_wrist  
+17. left_pinky  
+18. right_pinky  
+19. left_index  
+20. right_index  
+21. left_thumb  
+22. right_thumb  
+23. left_hip  
+24. right_hip  
+25. left_knee  
+26. right_knee  
+27. left_ankle  
+28. right_ankle  
+29. left_heel  
+30. right_heel  
+31. left_foot_index  
+32. right_foot_index  
+
+→ SVG cliquable avec ces labels (hover/click affiche nom + side-panel).
+
+### 4. Spécifications visuelles précises
+- **Tracker simple** : anneau (ring/cercle vide) autour du landmark.  
+  Taille proportionnelle à priorité : priorité 5 = plus gros/épais, priorité 1 = plus fin/petit (ex. rayon 8–24 px selon priorité).  
+- **Trailmotion** : trail sur **tout le mouvement** (toutes frames depuis début vidéo).  
+  - Couleur identique à l’anneau.  
+  - Épaisseur variable selon priorité (plus épais = priorité haute).  
+  - **Fading long progressif** : opacité diminue doucement sur la longueur du trail (ex. 100% au landmark actuel → ~20% au début du mouvement).  
+  - Animation : trail se dessine progressivement en lecture (real-time playback).  
+- **Couleurs** : palette fixe, indépendante priorité.  
+- **SVG preview** : après « Sauvegarder état », affiche anneaux + trails statiques (position moyenne ou dernière frame) sur squelette.
+
+### 5. Upload & robustesse
+- Formats : MP4, MOV, WebM (max 5 extensions).  
+- Limites : ≤ 100 Mo/vidéo, ≤ 10 vidéos par analyse, < 30 s conseillé.  
+- Recommandation forte affichée : « Pour meilleure précision : 60 fps, 1080p, corps entier visible, bonne lumière ».  
+- Pas de rejet auto (MVP) → warning si détection faible (MediaPipe visibility < 0.4 sur > 50% frames).
+
+### 6. Processing server-side (optimisé budget)
+- **MediaPipe** : Pose only (BlazePose lite/full selon charge CPU).  
+- **Option future** : toggle « Activer Hands » (21 pts/main) et/ou « Activer Face » (optionnel, augmente charge ~30–50%).  
+- Queue : RQ ou Celery simple (1–2 workers).  
+- Détection : single person (premier pose détecté).  
+- Output : landmarks par frame (JSON ou pickled) + vidéo annotée via OpenCV/FFmpeg.
+
+### 7. Exports (FFmpeg server-side)
+**Export 1 – Vidéo(s) originale(s) avec effets**  
+- 1 fichier MP4 par vidéo uploadée.  
+- Overlays : anneaux + trails animés (même couleur/épaisseur/fading).  
+- Son original conservé.  
+- Nom : `trailmo_original_[uuid]_[index].mp4`
+
+**Export 2 – Vidéo séquencée unique (fond noir)**  
+- 1 seul MP4.  
+- Structure :  
+  - Pour chaque landmark activé (dans ordre priorité décroissante ou index croissant) :  
+    - Slide = fond noir + SVG centré (anneau + trail fixe sur tout mouvement).  
+    - Superposé : texte (note + priorité + couleur).  
+    - Durée : **tracking du début à la fin de la vidéo** (même longueur que l’originale).  
+    - Pas de transition fade (coupe nette ou simple slide).  
+    - « Efficacité du move » = couleur du tracker (pas de score auto pour MVP).  
+- Nom : `trailmo_sequenced_[uuid].mp4`
+
+Téléchargements : 2+ liens (ZIP si >1 originale) ou boutons séparés.
+
+### 8. UI/UX détaillée
+- **Wizard** : page unique SVG + side-panel (pas de étapes multiples).  
+- **Barres de chargement** :  
+  - Upload → progression par fichier.  
+  - Processing → « Analyse en cours (MediaPipe)… » + % global.  
+  - Export FFmpeg → « Génération vidéos… » + barre visible.  
+- Responsive : SVG scale, side-panel mobile en bottom-sheet.
+
+### 9. Architecture technique MVP
+- **Frontend** : React + Vite + SVG (react-svg ou inline SVG cliquable).  
+- **Backend** : Python + FastAPI + MediaPipe Python + RQ/Celery queue + FFmpeg.  
+- **Stockage** : fichiers temporaires sur disque serveur (ou S3 si gratuit).  
+- **DB** : SQLite (templates + refs analyses).  
+- **Sécurité** : rate limit (ex. 3 analyses/heure/IP), taille max 100 Mo, validation mime-type + FFmpeg probe.
+
+### 10. User stories + complexité (estimation relative)
+- US-01 : Créer template via SVG cliquable → Medium  
+- US-02 : Sauvegarder état batch → Low  
+- US-03 : Upload multi-vidéos + progress → Medium  
+- US-04 : Processing MediaPipe server-side → High (optim CPU)  
+- US-05 : Export originale + overlays → High (FFmpeg animation)  
+- US-06 : Export séquencé fond noir + slides → High  
+- US-07 : Barres chargement claires → Medium  
+- US-08 : Responsive + i18n FR/EN → Low-Medium  
+
+Total complexité MVP : **Medium-High** (surtout exports animés + queue serveur).
+
+**Prochaines étapes suggérées**  
+1. Valider ce spec (ajouts/suppressions ?).  
+2. Dessiner wireframes simples (Figma/penpot).  
+3. PoC rapide : SVG interactif + mock export FFmpeg.  
+
+Dis-moi ce que tu veux affiner ou ajouter avant de passer en dev !

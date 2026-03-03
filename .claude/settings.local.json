@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install:*)",
+      "Bash(pnpm dev)",
+      "Bash(nvm list:*)",
+      "Bash(winget install:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(printenv:*)",
+      "Bash(echo:*)",
+      "Bash(curl:*)",
+      "Bash(npm install:*)",
+      "Bash(npx:*)",
+      "Bash(fnm:*)",
+      "Bash(scoop:*)",
+      "Bash(pnpm add:*)",
+      "Bash(dir:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
