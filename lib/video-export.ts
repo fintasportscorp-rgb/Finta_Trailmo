@@ -265,7 +265,19 @@ export async function exportAnnotatedVideo(
 
   const encoder = new VideoEncoder({
     output: (chunk, meta) => {
-      muxer.addVideoChunk(chunk, meta)
+      if (meta?.decoderConfig) {
+        if (!meta.decoderConfig.colorSpace) {
+          meta.decoderConfig.colorSpace = {
+            primaries: "bt709",
+            transfer: "bt709",
+            matrix: "bt709",
+            fullRange: false,
+          }
+        }
+        muxer.addVideoChunk(chunk, meta)
+      } else {
+        muxer.addVideoChunk(chunk)
+      }
     },
     error: (e) => {
       console.error("VideoEncoder error:", e)
