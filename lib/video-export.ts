@@ -481,11 +481,152 @@ async function exportWithMediaRecorder(
       await recorderDone
 
       const outputMime = selectedMime.split(";")[0] || "video/webm"
-      resolve(new Blob(chunks, { type: outputMime }))
+      const recordedBlob = new Blob(chunks, { type: outputMime })
+
+      if (outputMime.includes("mp4")) {
+        resolve(recordedBlob)
+        return
+      }
+
+      try {
+        const mp4Blob = await convertToMp4(recordedBlob, totalWidth, height, fps, duration, onProgress)
+        resolve(mp4Blob)
+      } catch (convErr) {
+        console.warn("MP4 conversion failed, returning WebM:", convErr)
+        resolve(recordedBlob)
+      }
     }
 
     video.currentTime = 0
     video.play().catch(reject)
+  })
+}
+
+async function convertToMp4(
+  sourceBlob: Blob,
+  width: number,
+  height: number,
+  fps: number,
+  duration: number,
+  onProgress: (pct: number) => void,
+): Promise<Blob> {
+  const blobUrl = URL.createObjectURL(sourceBlob)
+  const video = document.createElement("video")
+  video.src = blobUrl
+  video.muted = true
+  video.playsInline = true
+
+  await new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve()
+    video.onerror = () => reject(new Error("Failed to load recorded video"))
+  })
+
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext("2d")!
+
+  const codecCandidates = ["avc1.42001f", "avc1.4d001f", "avc1.640028"]
+  const bitrate = Math.min(width * height * 4, 5_000_000)
+  let codec: string | null = null
+
+  for (const c of codecCandidates) {
+    try {
+      const support = await VideoEncoder.isConfigSupported({
+        codec: c, width, height, bitrate, framerate: fps,
+      })
+      if (support.supported) { codec = c; break }
+    } catch { /* next */ }
+  }
+
+  if (!codec) throw new Error("No H.264 codec supported")
+
+  const muxer = new Mp4Muxer({
+    target: new Mp4Target(),
+    video: { codec: "avc", width, height },
+    fastStart: "in-memory",
+    firstTimestampBehavior: "offset",
+  })
+
+  let encoderError: Error | null = null
+
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => {
+      try {
+        if (meta?.decoderConfig) {
+          const dc = meta.decoderConfig
+          if (!dc.colorSpace || typeof dc.colorSpace !== "object") {
+            (dc as Record<string, unknown>).colorSpace = {
+              primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false,
+            }
+          }
+          muxer.addVideoChunk(chunk, meta)
+        } else {
+          muxer.addVideoChunk(chunk)
+        }
+      } catch (err) {
+        encoderError = err instanceof Error ? err : new Error(String(err))
+      }
+    },
+    error: (e) => { encoderError = e instanceof Error ? e : new Error(String(e)) },
+  })
+
+  encoder.configure({ codec, width, height, bitrate, framerate: fps })
+
+  return new Promise<Blob>((resolve, reject) => {
+    let frameCount = 0
+
+    const drawAndEncode = () => {
+      if (video.ended || video.paused) return
+      if (encoderError) {
+        video.pause()
+        encoder.close()
+        URL.revokeObjectURL(blobUrl)
+        reject(encoderError)
+        return
+      }
+
+      ctx.drawImage(video, 0, 0, width, height)
+
+      const vf = new VideoFrame(canvas, {
+        timestamp: Math.round(video.currentTime * 1_000_000),
+      })
+      const keyFrame = frameCount % (fps * 2) === 0
+      encoder.encode(vf, { keyFrame })
+      vf.close()
+      frameCount++
+
+      const pct = Math.round((video.currentTime / duration) * 100)
+      onProgress(Math.min(pct, 99))
+
+      if (!video.ended) requestAnimationFrame(drawAndEncode)
+    }
+
+    video.onplay = () => drawAndEncode()
+
+    video.onended = async () => {
+      try {
+        await encoder.flush()
+        encoder.close()
+
+        if (encoderError) throw encoderError
+
+        muxer.finalize()
+        const { buffer } = muxer.target as Mp4Target
+        URL.revokeObjectURL(blobUrl)
+        onProgress(100)
+        resolve(new Blob([buffer], { type: "video/mp4" }))
+      } catch (err) {
+        URL.revokeObjectURL(blobUrl)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
+    }
+
+    video.currentTime = 0
+    video.play().catch((err) => {
+      URL.revokeObjectURL(blobUrl)
+      reject(err)
+    })
   })
 }
 
