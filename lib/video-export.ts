@@ -324,8 +324,12 @@ async function exportWithWebCodecs(
     const frameTime = i / fps
     video.currentTime = frameTime
 
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve()
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Seek timeout")), 5000)
+      video.onseeked = () => {
+        clearTimeout(timeout)
+        resolve()
+      }
     })
 
     ctx.drawImage(video, 0, 0, width, height)
@@ -368,8 +372,7 @@ async function exportWithMediaRecorder(
   globalComment?: string,
   locale: Locale = "en"
 ): Promise<Blob> {
-  const { width, height, fps, frames, blobUrl } = analysis
-  const totalFrames = frames.length
+  const { width, height, fps, frames, blobUrl, duration } = analysis
 
   const hasAnnotations = getAnnotatedLandmarks(template, locale).length > 0 || globalComment
   const totalWidth = hasAnnotations ? width + PANEL_WIDTH : width
@@ -390,9 +393,7 @@ async function exportWithMediaRecorder(
   canvas.height = height
   const ctx = canvas.getContext("2d")!
 
-  const supportsRequestFrame = typeof CanvasCaptureMediaStreamTrack !== "undefined"
-  const stream = canvas.captureStream(supportsRequestFrame ? 0 : fps)
-  const canvasTrack = stream.getVideoTracks()[0]
+  const stream = canvas.captureStream(fps)
 
   const mimeTypes = [
     "video/webm;codecs=vp9",
@@ -425,49 +426,66 @@ async function exportWithMediaRecorder(
     recorder.onstop = () => resolve()
   })
 
-  recorder.start()
+  recorder.start(100)
 
-  for (let i = 0; i < totalFrames; i++) {
-    if (signal?.aborted) {
+  return new Promise<Blob>((resolve, reject) => {
+    let aborted = false
+
+    const onAbort = () => {
+      aborted = true
+      video.pause()
       recorder.stop()
-      canvasTrack.stop()
-      throw new Error("Export cancelled")
+      stream.getTracks().forEach((t) => t.stop())
+      reject(new Error("Export cancelled"))
     }
 
-    const frameTime = i / fps
-    video.currentTime = frameTime
+    signal?.addEventListener("abort", onAbort, { once: true })
 
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve()
-    })
+    const drawFrame = () => {
+      if (aborted) return
 
-    ctx.drawImage(video, 0, 0, width, height)
-    drawOverlayFrame(ctx, i, frames, template, width, height, fps)
+      const currentTime = video.currentTime
+      const pct = Math.round((currentTime / duration) * 100)
+      onProgress(Math.min(pct, 99))
 
-    if (hasAnnotations) {
-      drawRightPanel(ctx, width, PANEL_WIDTH, height, template, globalComment, locale)
+      ctx.drawImage(video, 0, 0, width, height)
+
+      const frameIndex = Math.min(
+        Math.floor(currentTime * fps),
+        frames.length - 1
+      )
+      if (frameIndex >= 0) {
+        drawOverlayFrame(ctx, frameIndex, frames, template, width, height, fps)
+      }
+
+      if (hasAnnotations) {
+        drawRightPanel(ctx, width, PANEL_WIDTH, height, template, globalComment, locale)
+      }
+
+      if (!video.ended && !video.paused) {
+        requestAnimationFrame(drawFrame)
+      }
     }
 
-    if ("requestFrame" in canvasTrack) {
-      (canvasTrack as ImageCaptureSource & MediaStreamTrack).requestFrame()
+    video.onplay = () => {
+      drawFrame()
     }
 
-    const pct = Math.round(((i + 1) / totalFrames) * 100)
-    onProgress(pct)
+    video.onended = async () => {
+      onProgress(100)
+      recorder.stop()
+      stream.getTracks().forEach((t) => t.stop())
+      signal?.removeEventListener("abort", onAbort)
 
-    await new Promise((r) => setTimeout(r, 1000 / fps))
-  }
+      await recorderDone
 
-  recorder.stop()
-  canvasTrack.stop()
-  await recorderDone
+      const outputMime = selectedMime.split(";")[0] || "video/webm"
+      resolve(new Blob(chunks, { type: outputMime }))
+    }
 
-  const outputMime = selectedMime.split(";")[0] || "video/webm"
-  return new Blob(chunks, { type: outputMime })
-}
-
-interface ImageCaptureSource {
-  requestFrame(): void
+    video.currentTime = 0
+    video.play().catch(reject)
+  })
 }
 
 /**
