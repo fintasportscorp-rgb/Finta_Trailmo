@@ -186,13 +186,27 @@ export async function exportAnnotatedVideo(
   globalComment?: string,
   locale: Locale = "en"
 ): Promise<Blob> {
+  try {
+    return await exportWithWebCodecs(analysis, template, { onProgress, signal }, globalComment, locale)
+  } catch (e) {
+    console.warn("WebCodecs export failed, falling back to MediaRecorder:", e)
+    return await exportWithMediaRecorder(analysis, template, { onProgress, signal }, globalComment, locale)
+  }
+}
+
+async function exportWithWebCodecs(
+  analysis: VideoAnalysis,
+  template: Template,
+  { onProgress, signal }: ExportProgress,
+  globalComment?: string,
+  locale: Locale = "en"
+): Promise<Blob> {
   const { width, height, fps, frames, blobUrl } = analysis
   const totalFrames = frames.length
 
   const hasAnnotations = getAnnotatedLandmarks(template, locale).length > 0 || globalComment
   const totalWidth = hasAnnotations ? width + PANEL_WIDTH : width
 
-  // Create a hidden video element for frame extraction
   const video = document.createElement("video")
   video.src = blobUrl
   video.muted = true
@@ -207,7 +221,6 @@ export async function exportAnnotatedVideo(
   const canvas = new OffscreenCanvas(totalWidth, height)
   const ctx = canvas.getContext("2d")!
 
-  // Detect which codec the browser supports: prefer H.264 (MP4), fall back to VP8/VP9 (WebM)
   const codecCandidates = [
     { codec: "avc1.42001f", container: "mp4" as const },
     { codec: "avc1.4d001f", container: "mp4" as const },
@@ -240,10 +253,9 @@ export async function exportAnnotatedVideo(
   }
 
   if (!selectedCodec || !selectedContainer) {
-    throw new Error("No supported video codec found for export")
+    throw new Error("No supported video codec found")
   }
 
-  // Create the appropriate muxer based on detected codec
   let muxer: { addVideoChunk: (chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void; finalize: () => void; target: Mp4Target | WebmTarget }
 
   if (selectedContainer === "mp4") {
@@ -263,24 +275,31 @@ export async function exportAnnotatedVideo(
     muxer = webm
   }
 
+  let encoderError: Error | null = null
+
   const encoder = new VideoEncoder({
     output: (chunk, meta) => {
-      if (meta?.decoderConfig) {
-        if (!meta.decoderConfig.colorSpace) {
-          meta.decoderConfig.colorSpace = {
-            primaries: "bt709",
-            transfer: "bt709",
-            matrix: "bt709",
-            fullRange: false,
+      try {
+        if (meta?.decoderConfig) {
+          const dc = meta.decoderConfig
+          if (!dc.colorSpace || typeof dc.colorSpace !== "object") {
+            (dc as Record<string, unknown>).colorSpace = {
+              primaries: "bt709",
+              transfer: "bt709",
+              matrix: "bt709",
+              fullRange: false,
+            }
           }
+          muxer.addVideoChunk(chunk, meta)
+        } else {
+          muxer.addVideoChunk(chunk)
         }
-        muxer.addVideoChunk(chunk, meta)
-      } else {
-        muxer.addVideoChunk(chunk)
+      } catch (err) {
+        encoderError = err instanceof Error ? err : new Error(String(err))
       }
     },
     error: (e) => {
-      console.error("VideoEncoder error:", e)
+      encoderError = e instanceof Error ? e : new Error(String(e))
     },
   })
 
@@ -297,6 +316,10 @@ export async function exportAnnotatedVideo(
       encoder.close()
       throw new Error("Export cancelled")
     }
+    if (encoderError) {
+      encoder.close()
+      throw encoderError
+    }
 
     const frameTime = i / fps
     video.currentTime = frameTime
@@ -305,11 +328,9 @@ export async function exportAnnotatedVideo(
       video.onseeked = () => resolve()
     })
 
-    // Draw video frame on the left
     ctx.drawImage(video, 0, 0, width, height)
     drawOverlayFrame(ctx, i, frames, template, width, height, fps)
 
-    // Draw right panel (only on first frame draw, panel is static)
     if (hasAnnotations) {
       drawRightPanel(ctx, width, PANEL_WIDTH, height, template, globalComment, locale)
     }
@@ -325,18 +346,128 @@ export async function exportAnnotatedVideo(
     const pct = Math.round(((i + 1) / totalFrames) * 100)
     onProgress(pct)
 
-    // Yield every 5 frames to keep UI responsive
     if (i % 5 === 0) await yieldToMain()
   }
 
   await encoder.flush()
   encoder.close()
 
+  if (encoderError) throw encoderError
+
   muxer.finalize()
 
   const { buffer } = muxer.target as Mp4Target | WebmTarget
   const mimeType = selectedContainer === "mp4" ? "video/mp4" : "video/webm"
   return new Blob([buffer], { type: mimeType })
+}
+
+async function exportWithMediaRecorder(
+  analysis: VideoAnalysis,
+  template: Template,
+  { onProgress, signal }: ExportProgress,
+  globalComment?: string,
+  locale: Locale = "en"
+): Promise<Blob> {
+  const { width, height, fps, frames, blobUrl } = analysis
+  const totalFrames = frames.length
+
+  const hasAnnotations = getAnnotatedLandmarks(template, locale).length > 0 || globalComment
+  const totalWidth = hasAnnotations ? width + PANEL_WIDTH : width
+
+  const video = document.createElement("video")
+  video.src = blobUrl
+  video.muted = true
+  video.playsInline = true
+  video.crossOrigin = "anonymous"
+
+  await new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve()
+    video.onerror = () => reject(new Error("Failed to load video"))
+  })
+
+  const canvas = document.createElement("canvas")
+  canvas.width = totalWidth
+  canvas.height = height
+  const ctx = canvas.getContext("2d")!
+
+  const supportsRequestFrame = typeof CanvasCaptureMediaStreamTrack !== "undefined"
+  const stream = canvas.captureStream(supportsRequestFrame ? 0 : fps)
+  const canvasTrack = stream.getVideoTracks()[0]
+
+  const mimeTypes = [
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8",
+    "video/webm",
+    "video/mp4",
+  ]
+  let selectedMime = ""
+  for (const mime of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(mime)) {
+      selectedMime = mime
+      break
+    }
+  }
+  if (!selectedMime) {
+    throw new Error("No supported video format found for recording")
+  }
+
+  const chunks: Blob[] = []
+  const recorder = new MediaRecorder(stream, {
+    mimeType: selectedMime,
+    videoBitsPerSecond: Math.min(totalWidth * height * 4, 5_000_000),
+  })
+
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data)
+  }
+
+  const recorderDone = new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve()
+  })
+
+  recorder.start()
+
+  for (let i = 0; i < totalFrames; i++) {
+    if (signal?.aborted) {
+      recorder.stop()
+      canvasTrack.stop()
+      throw new Error("Export cancelled")
+    }
+
+    const frameTime = i / fps
+    video.currentTime = frameTime
+
+    await new Promise<void>((resolve) => {
+      video.onseeked = () => resolve()
+    })
+
+    ctx.drawImage(video, 0, 0, width, height)
+    drawOverlayFrame(ctx, i, frames, template, width, height, fps)
+
+    if (hasAnnotations) {
+      drawRightPanel(ctx, width, PANEL_WIDTH, height, template, globalComment, locale)
+    }
+
+    if ("requestFrame" in canvasTrack) {
+      (canvasTrack as ImageCaptureSource & MediaStreamTrack).requestFrame()
+    }
+
+    const pct = Math.round(((i + 1) / totalFrames) * 100)
+    onProgress(pct)
+
+    await new Promise((r) => setTimeout(r, 1000 / fps))
+  }
+
+  recorder.stop()
+  canvasTrack.stop()
+  await recorderDone
+
+  const outputMime = selectedMime.split(";")[0] || "video/webm"
+  return new Blob(chunks, { type: outputMime })
+}
+
+interface ImageCaptureSource {
+  requestFrame(): void
 }
 
 /**

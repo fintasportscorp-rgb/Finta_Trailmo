@@ -6,7 +6,6 @@ import { useTemplate } from "@/lib/template-store"
 import { useTranslation } from "@/lib/i18n/i18n-context"
 import { initPoseLandmarker, processVideo, isModelReady } from "@/lib/pose-engine"
 import {
-  isWebCodecsSupported,
   exportAnnotatedVideo,
   generateSummaryPNGAsync,
 } from "@/lib/video-export"
@@ -367,10 +366,6 @@ function VideoResultCard({
     .sort((a, b) => b.config.priority - a.config.priority)
 
   const handleDownloadVideo = useCallback(async () => {
-    if (!isWebCodecsSupported()) {
-      toast.error(t("export.unsupported"))
-      return
-    }
     setDownloading("video")
     setDownloadPct(0)
     try {
