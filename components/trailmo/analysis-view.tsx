@@ -221,7 +221,7 @@ export function AnalysisView() {
 
       {/* Content */}
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-6 p-4 md:p-6">
+        <div className="flex flex-col gap-6 p-3 sm:p-4 md:p-6">
           {(isIdle || isComplete || isError) && <VideoUploadZone />}
           <VideoFileList />
           {isComplete && <AnalysisResults />}
@@ -229,10 +229,10 @@ export function AnalysisView() {
       </ScrollArea>
 
       {/* Bottom action bar */}
-      <div className="flex items-center justify-between border-t border-border px-4 py-3 md:px-6">
+      <div className="flex items-center justify-between gap-2 border-t border-border px-3 sm:px-4 py-3 md:px-6">
         {isProcessing ? (
           <>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground min-w-0 truncate">
               {t("analysis.videosDone", {
                 done: String(state.videos.filter((v) => v.status === "complete").length),
                 total: String(state.videos.length),
@@ -242,20 +242,20 @@ export function AnalysisView() {
               variant="ghost"
               size="sm"
               onClick={handleAbort}
-              className="text-destructive-foreground hover:bg-destructive/10"
+              className="shrink-0 text-destructive-foreground hover:bg-destructive/10"
             >
               {t("analysis.cancelBtn")}
             </Button>
           </>
         ) : (
           <>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground min-w-0 truncate">
               {t("analysis.videosReady", {
                 count: String(state.videos.length),
                 s: state.videos.length !== 1 ? "s" : "",
               })}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <Button
                 size="sm"
                 disabled={!hasVideos || isProcessing}
@@ -417,10 +417,10 @@ function VideoResultCard({
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       {/* Video header */}
-      <div className="px-4 py-3">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-foreground truncate">{analysis.fileName}</p>
-          <div className="flex items-center gap-1">
+      <div className="px-3 sm:px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium text-foreground truncate min-w-0">{analysis.fileName}</p>
+          <div className="flex items-center gap-1 shrink-0">
             <Button
               variant="ghost"
               size="sm"
@@ -428,11 +428,11 @@ function VideoResultCard({
               onClick={onPreview}
             >
               <Eye className="h-3.5 w-3.5" />
-              {t("results.preview")}
+              <span className="hidden sm:inline">{t("results.preview")}</span>
             </Button>
           </div>
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <div className="mt-2 grid grid-cols-2 gap-x-3 sm:gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>
             {t("results.resolution")}:{" "}
             <span className="text-foreground">{analysis.width}x{analysis.height}</span>
@@ -499,7 +499,7 @@ function VideoResultCard({
       </div>
 
       {/* Download bar */}
-      <div className="border-t border-border px-4 py-2.5 flex items-center gap-2">
+      <div className="border-t border-border px-3 sm:px-4 py-2.5 flex flex-wrap items-center gap-2">
         <Button
           variant="secondary"
           size="sm"

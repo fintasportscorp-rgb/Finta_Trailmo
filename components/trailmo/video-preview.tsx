@@ -95,20 +95,20 @@ export function VideoPreview() {
   const hasAnnotations = annotatedLandmarks.length > 0 || template.globalComment
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95">
-      <div className="flex w-full max-w-5xl flex-col gap-3 p-4 md:p-6">
+    <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-background/95 overflow-y-auto">
+      <div className="flex w-full max-w-5xl flex-col gap-3 p-3 sm:p-4 md:p-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">
               {t("preview.title")}
             </h3>
-            <p className="text-xs text-muted-foreground">{analysis.fileName}</p>
+            <p className="text-xs text-muted-foreground truncate">{analysis.fileName}</p>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={handleClose}
             aria-label={t("preview.close")}
           >
@@ -117,9 +117,9 @@ export function VideoPreview() {
         </div>
 
         {/* Video + Right annotation panel */}
-        <div className="flex gap-0 overflow-hidden rounded-lg border border-border">
+        <div className="flex flex-col md:flex-row gap-0 overflow-hidden rounded-lg border border-border">
           {/* Video + Canvas overlay */}
-          <div className="relative flex-1 bg-card">
+          <div className="relative flex-1 min-w-0 bg-card">
             <video
               ref={videoRef}
               src={analysis.blobUrl}
@@ -137,7 +137,7 @@ export function VideoPreview() {
 
           {/* Right annotation panel */}
           {hasAnnotations && (
-            <div className="w-[280px] shrink-0 border-l border-border bg-card/95 p-4 overflow-y-auto max-h-[70vh]">
+            <div className="w-full md:w-[280px] shrink-0 border-t md:border-t-0 md:border-l border-border bg-card/95 p-3 sm:p-4 overflow-y-auto max-h-[40vh] md:max-h-[70vh]">
               {template.globalComment && (
                 <div className="mb-3">
                   <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
