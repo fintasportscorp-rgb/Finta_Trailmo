@@ -396,10 +396,11 @@ async function exportWithMediaRecorder(
   const stream = canvas.captureStream(fps)
 
   const mimeTypes = [
+    "video/mp4",
+    "video/mp4;codecs=avc1",
     "video/webm;codecs=vp9",
     "video/webm;codecs=vp8",
     "video/webm",
-    "video/mp4",
   ]
   let selectedMime = ""
   for (const mime of mimeTypes) {
