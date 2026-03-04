@@ -158,9 +158,9 @@ export function AnalysisView() {
   }, [dispatch, isProcessing])
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-6">
+      <div className="flex items-center gap-3 border-b border-border px-3 sm:px-4 py-3 md:px-6">
         <Button
           variant="ghost"
           size="icon"
@@ -207,7 +207,7 @@ export function AnalysisView() {
 
       {/* Global progress bar */}
       {isProcessing && (
-        <div className="px-4 py-2 md:px-6">
+        <div className="px-3 sm:px-4 py-2 md:px-6">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-muted-foreground">
               {state.status === "initializing"
@@ -220,8 +220,8 @@ export function AnalysisView() {
       )}
 
       {/* Content */}
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-6 p-3 sm:p-4 md:p-6">
+      <ScrollArea className="flex-1 min-w-0">
+        <div className="flex flex-col gap-6 p-3 sm:p-4 md:p-6 overflow-hidden">
           {(isIdle || isComplete || isError) && <VideoUploadZone />}
           <VideoFileList />
           {isComplete && <AnalysisResults />}

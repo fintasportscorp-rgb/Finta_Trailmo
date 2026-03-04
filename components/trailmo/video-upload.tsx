@@ -76,7 +76,7 @@ export function VideoUploadZone() {
   )
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 min-w-0">
       {/* Dropzone */}
       <div
         onDragOver={(e) => {
@@ -85,7 +85,7 @@ export function VideoUploadZone() {
         }}
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
-        className={`relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 transition-colors ${
+        className={`relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-4 sm:px-6 py-8 sm:py-10 transition-colors ${
           isDragOver
             ? "border-primary bg-primary/5"
             : isAtVideoLimit
@@ -110,13 +110,13 @@ export function VideoUploadZone() {
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
           <Upload className="h-5 w-5 text-muted-foreground" />
         </div>
-        <div className="text-center">
-          <p className="text-sm font-medium text-foreground">
+        <div className="text-center max-w-full px-1">
+          <p className="text-sm font-medium text-foreground break-words">
             {isAtVideoLimit
               ? t("upload.limitReached")
               : t("upload.dropOrBrowse")}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground break-words">
             {t("upload.hint", { max: String(MAX_VIDEOS) })}
           </p>
         </div>
@@ -132,9 +132,9 @@ export function VideoUploadZone() {
       </div>
 
       {/* Recommendation */}
-      <div className="flex items-start gap-2.5 rounded-lg bg-card px-3.5 py-2.5 border border-border">
+      <div className="flex items-start gap-2.5 rounded-lg bg-card px-3 sm:px-3.5 py-2.5 border border-border min-w-0">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-tracker-yellow" />
-        <p className="text-xs text-muted-foreground leading-relaxed">
+        <p className="text-xs text-muted-foreground leading-relaxed break-words min-w-0">
           {t("upload.recommendation")}
         </p>
       </div>
@@ -150,7 +150,7 @@ export function VideoFileList() {
   if (videos.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 min-w-0">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
           {t("upload.videos")} ({videos.length}/{MAX_VIDEOS})
